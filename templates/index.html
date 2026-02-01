@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DualSense Controller Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            color: #fff;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+
+        .status.connected { background: #2ecc71; color: #000; }
+        .status.disconnected { background: #e74c3c; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .card h2 {
+            font-size: 1rem;
+            color: #888;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Sticks */
+        .sticks-container {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+        }
+
+        .stick-wrapper {
+            text-align: center;
+        }
+
+        .stick {
+            width: 120px;
+            height: 120px;
+            background: radial-gradient(circle, #2a2a3a 0%, #1a1a2a 100%);
+            border-radius: 50%;
+            position: relative;
+            border: 3px solid #333;
+        }
+
+        .stick-dot {
+            width: 40px;
+            height: 40px;
+            background: radial-gradient(circle, #4a90d9 0%, #2a5a9a 100%);
+            border-radius: 50%;
+            position: absolute;
+            transform: translate(-50%, -50%);
+            transition: all 0.05s ease-out;
+            box-shadow: 0 0 10px rgba(74, 144, 217, 0.5);
+        }
+
+        .stick-label {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        /* Triggers */
+        .triggers-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .trigger {
+            flex: 1;
+        }
+
+        .trigger-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+
+        .trigger-bar {
+            height: 25px;
+            background: #1a1a2a;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .trigger-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #e74c3c, #f39c12);
+            transition: width 0.05s ease-out;
+            border-radius: 5px;
+        }
+
+        .trigger-fill.clicked {
+            background: linear-gradient(90deg, #2ecc71, #27ae60);
+        }
+
+        /* Buttons */
+        .buttons-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 12px 8px;
+            background: #2a2a3a;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 0.8rem;
+            transition: all 0.1s;
+            border: 2px solid transparent;
+        }
+
+        .btn.active {
+            background: #4a90d9;
+            color: #fff;
+            border-color: #6ab0f9;
+            box-shadow: 0 0 15px rgba(74, 144, 217, 0.5);
+        }
+
+        .btn.face { border-radius: 50%; width: 50px; height: 50px; margin: 0 auto; }
+        .btn.cross.active { background: #3498db; }
+        .btn.circle.active { background: #e74c3c; }
+        .btn.square.active { background: #e91e8c; }
+        .btn.triangle.active { background: #2ecc71; }
+
+        /* D-Pad */
+        .dpad-container {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 40px);
+            grid-template-rows: repeat(3, 40px);
+            gap: 2px;
+        }
+
+        .dpad-btn {
+            background: #2a2a3a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            border-radius: 5px;
+        }
+
+        .dpad-btn.active { background: #4a90d9; }
+        .dpad-center { background: transparent !important; }
+
+        /* Face buttons layout */
+        .face-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 50px);
+            grid-template-rows: repeat(3, 50px);
+            gap: 5px;
+            justify-content: center;
+        }
+
+        .face-buttons .btn { margin: 0; }
+
+        /* Touchpad */
+        .touchpad {
+            width: 100%;
+            height: 120px;
+            background: linear-gradient(145deg, #2a2a3a, #1a1a2a);
+            border-radius: 10px;
+            position: relative;
+            border: 2px solid #333;
+        }
+
+        .touchpad.clicked {
+            border-color: #4a90d9;
+            box-shadow: 0 0 15px rgba(74, 144, 217, 0.3);
+        }
+
+        .touch-point {
+            width: 30px;
+            height: 30px;
+            background: radial-gradient(circle, #f39c12, #d68910);
+            border-radius: 50%;
+            position: absolute;
+            transform: translate(-50%, -50%);
+            display: none;
+            box-shadow: 0 0 10px rgba(243, 156, 18, 0.5);
+        }
+
+        .touch-point.active { display: block; }
+
+        /* Motion */
+        .motion-bars {
+            display: grid;
+            gap: 10px;
+        }
+
+        .motion-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .motion-label {
+            width: 50px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .motion-bar {
+            flex: 1;
+            height: 20px;
+            background: #1a1a2a;
+            border-radius: 3px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .motion-bar::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: #444;
+        }
+
+        .motion-fill {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            background: #4a90d9;
+            transition: all 0.05s ease-out;
+        }
+
+        .motion-value {
+            width: 70px;
+            text-align: right;
+            font-size: 0.8rem;
+            font-family: monospace;
+        }
+
+        /* Output Controls */
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: #888;
+        }
+
+        .color-picker-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        input[type="color"] {
+            width: 60px;
+            height: 40px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .color-presets {
+            display: flex;
+            gap: 8px;
+        }
+
+        .color-preset {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+
+        .color-preset:hover { transform: scale(1.1); }
+
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+
+        .slider-row label {
+            width: 60px;
+            margin: 0;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            height: 8px;
+            -webkit-appearance: none;
+            background: #1a1a2a;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #4a90d9;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .slider-value {
+            width: 40px;
+            text-align: right;
+            font-family: monospace;
+        }
+
+        .led-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .led-btn {
+            padding: 8px 16px;
+            background: #2a2a3a;
+            border: none;
+            border-radius: 5px;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .led-btn:hover { background: #3a3a4a; }
+        .led-btn.active { background: #4a90d9; }
+
+        .trigger-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .trigger-control {
+            background: #1a1a2a;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .trigger-control h4 {
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+        }
+
+        select {
+            width: 100%;
+            padding: 8px;
+            background: #2a2a3a;
+            border: 1px solid #333;
+            border-radius: 5px;
+            color: #e0e0e0;
+            margin-bottom: 10px;
+        }
+
+        /* Battery */
+        .battery {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .battery-bar {
+            width: 80px;
+            height: 20px;
+            background: #1a1a2a;
+            border-radius: 3px;
+            border: 2px solid #333;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .battery-bar::after {
+            content: '';
+            position: absolute;
+            right: -6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 10px;
+            background: #333;
+            border-radius: 0 2px 2px 0;
+        }
+
+        .battery-fill {
+            height: 100%;
+            background: #2ecc71;
+            transition: width 0.3s;
+        }
+
+        .battery-fill.low { background: #e74c3c; }
+        .battery-fill.medium { background: #f39c12; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>DualSense Controller Test</h1>
+            <span class="status disconnected" id="status">Connecting...</span>
+        </header>
+
+        <div class="grid">
+            <!-- Sticks -->
+            <div class="card">
+                <h2>Analog Sticks</h2>
+                <div class="sticks-container">
+                    <div class="stick-wrapper">
+                        <div class="stick" id="left-stick">
+                            <div class="stick-dot" id="left-dot"></div>
+                        </div>
+                        <div class="stick-label">Left <span id="left-coords">(128, 128)</span></div>
+                    </div>
+                    <div class="stick-wrapper">
+                        <div class="stick" id="right-stick">
+                            <div class="stick-dot" id="right-dot"></div>
+                        </div>
+                        <div class="stick-label">Right <span id="right-coords">(128, 128)</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Triggers -->
+            <div class="card">
+                <h2>Triggers</h2>
+                <div class="triggers-container">
+                    <div class="trigger">
+                        <div class="trigger-label">
+                            <span>L2</span>
+                            <span id="l2-value">0</span>
+                        </div>
+                        <div class="trigger-bar">
+                            <div class="trigger-fill" id="l2-fill"></div>
+                        </div>
+                    </div>
+                    <div class="trigger">
+                        <div class="trigger-label">
+                            <span>R2</span>
+                            <span id="r2-value">0</span>
+                        </div>
+                        <div class="trigger-bar">
+                            <div class="trigger-fill" id="r2-fill"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="triggers-container" style="margin-top: 15px;">
+                    <div class="trigger">
+                        <div class="trigger-label"><span>L1</span></div>
+                        <div class="btn" id="btn-l1">L1</div>
+                    </div>
+                    <div class="trigger">
+                        <div class="trigger-label"><span>R1</span></div>
+                        <div class="btn" id="btn-r1">R1</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- D-Pad & Face Buttons -->
+            <div class="card">
+                <h2>Buttons</h2>
+                <div style="display: flex; justify-content: space-around; align-items: center;">
+                    <div>
+                        <div class="dpad">
+                            <div></div>
+                            <div class="dpad-btn" id="dpad-up">▲</div>
+                            <div></div>
+                            <div class="dpad-btn" id="dpad-left">◀</div>
+                            <div class="dpad-center"></div>
+                            <div class="dpad-btn" id="dpad-right">▶</div>
+                            <div></div>
+                            <div class="dpad-btn" id="dpad-down">▼</div>
+                            <div></div>
+                        </div>
+                    </div>
+                    <div class="face-buttons">
+                        <div></div>
+                        <div class="btn face triangle" id="btn-triangle">△</div>
+                        <div></div>
+                        <div class="btn face square" id="btn-square">□</div>
+                        <div></div>
+                        <div class="btn face circle" id="btn-circle">○</div>
+                        <div></div>
+                        <div class="btn face cross" id="btn-cross">✕</div>
+                        <div></div>
+                    </div>
+                </div>
+
+                <div class="buttons-grid" style="margin-top: 20px;">
+                    <div class="btn" id="btn-create">CREATE</div>
+                    <div class="btn" id="btn-ps">PS</div>
+                    <div class="btn" id="btn-options">OPTIONS</div>
+                    <div class="btn" id="btn-mute">MUTE</div>
+                    <div class="btn" id="btn-l3">L3</div>
+                    <div class="btn" id="btn-touchpad">TOUCH</div>
+                    <div class="btn" id="btn-r3">R3</div>
+                </div>
+            </div>
+
+            <!-- Touchpad -->
+            <div class="card">
+                <h2>Touchpad</h2>
+                <div class="touchpad" id="touchpad">
+                    <div class="touch-point" id="touch1"></div>
+                    <div class="touch-point" id="touch2"></div>
+                </div>
+            </div>
+
+            <!-- Motion -->
+            <div class="card">
+                <h2>Motion Sensors</h2>
+                <div class="motion-bars">
+                    <div class="motion-row">
+                        <span class="motion-label">Gyro X</span>
+                        <div class="motion-bar"><div class="motion-fill" id="gyro-x"></div></div>
+                        <span class="motion-value" id="gyro-x-val">0</span>
+                    </div>
+                    <div class="motion-row">
+                        <span class="motion-label">Gyro Y</span>
+                        <div class="motion-bar"><div class="motion-fill" id="gyro-y"></div></div>
+                        <span class="motion-value" id="gyro-y-val">0</span>
+                    </div>
+                    <div class="motion-row">
+                        <span class="motion-label">Gyro Z</span>
+                        <div class="motion-bar"><div class="motion-fill" id="gyro-z"></div></div>
+                        <span class="motion-value" id="gyro-z-val">0</span>
+                    </div>
+                    <div class="motion-row" style="margin-top: 10px;">
+                        <span class="motion-label">Accel X</span>
+                        <div class="motion-bar"><div class="motion-fill" id="accel-x"></div></div>
+                        <span class="motion-value" id="accel-x-val">0</span>
+                    </div>
+                    <div class="motion-row">
+                        <span class="motion-label">Accel Y</span>
+                        <div class="motion-bar"><div class="motion-fill" id="accel-y"></div></div>
+                        <span class="motion-value" id="accel-y-val">0</span>
+                    </div>
+                    <div class="motion-row">
+                        <span class="motion-label">Accel Z</span>
+                        <div class="motion-bar"><div class="motion-fill" id="accel-z"></div></div>
+                        <span class="motion-value" id="accel-z-val">0</span>
+                    </div>
+                </div>
+
+                <div class="battery">
+                    <span>Battery:</span>
+                    <div class="battery-bar">
+                        <div class="battery-fill" id="battery-fill"></div>
+                    </div>
+                    <span id="battery-text">--</span>
+                </div>
+            </div>
+
+            <!-- Output Controls -->
+            <div class="card">
+                <h2>Output Controls</h2>
+
+                <div class="control-group">
+                    <label>Lightbar Color</label>
+                    <div class="color-picker-row">
+                        <input type="color" id="lightbar-color" value="#0000ff">
+                        <div class="color-presets">
+                            <div class="color-preset" style="background: #ff0000" data-color="#ff0000"></div>
+                            <div class="color-preset" style="background: #00ff00" data-color="#00ff00"></div>
+                            <div class="color-preset" style="background: #0000ff" data-color="#0000ff"></div>
+                            <div class="color-preset" style="background: #ffff00" data-color="#ffff00"></div>
+                            <div class="color-preset" style="background: #ff00ff" data-color="#ff00ff"></div>
+                            <div class="color-preset" style="background: #00ffff" data-color="#00ffff"></div>
+                            <div class="color-preset" style="background: #ffffff" data-color="#ffffff"></div>
+                            <div class="color-preset" style="background: #000000; border-color: #444" data-color="#000000"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Haptic Motors</label>
+                    <div class="slider-row">
+                        <label>Left</label>
+                        <input type="range" id="haptic-left" min="0" max="255" value="0">
+                        <span class="slider-value" id="haptic-left-val">0</span>
+                    </div>
+                    <div class="slider-row">
+                        <label>Right</label>
+                        <input type="range" id="haptic-right" min="0" max="255" value="0">
+                        <span class="slider-value" id="haptic-right-val">0</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Player LEDs</label>
+                    <div class="led-buttons">
+                        <button class="led-btn" data-led="0">Off</button>
+                        <button class="led-btn" data-led="4">P1</button>
+                        <button class="led-btn" data-led="17">P2</button>
+                        <button class="led-btn" data-led="21">P3</button>
+                        <button class="led-btn" data-led="27">P4</button>
+                        <button class="led-btn" data-led="31">All</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Adaptive Triggers</label>
+                    <div class="trigger-controls">
+                        <div class="trigger-control">
+                            <h4>L2</h4>
+                            <select id="l2-mode">
+                                <option value="off">Off</option>
+                                <option value="rigid">Rigid</option>
+                                <option value="pulse">Pulse</option>
+                            </select>
+                        </div>
+                        <div class="trigger-control">
+                            <h4>R2</h4>
+                            <select id="r2-mode">
+                                <option value="off">Off</option>
+                                <option value="rigid">Rigid</option>
+                                <option value="pulse">Pulse</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+
+        // Status handling
+        socket.on('connect', () => {
+            console.log('WebSocket connected');
+        });
+
+        socket.on('status', (data) => {
+            const status = document.getElementById('status');
+            if (data.connected) {
+                status.textContent = 'Connected';
+                status.className = 'status connected';
+            } else {
+                status.textContent = 'Disconnected: ' + (data.error || '');
+                status.className = 'status disconnected';
+            }
+        });
+
+        // Controller state updates
+        socket.on('controller_state', (state) => {
+            updateSticks(state);
+            updateTriggers(state);
+            updateButtons(state);
+            updateTouchpad(state);
+            updateMotion(state);
+            updateBattery(state);
+        });
+
+        function updateSticks(state) {
+            // Left stick
+            const lx = (state.left_stick.x / 255) * 100;
+            const ly = (state.left_stick.y / 255) * 100;
+            document.getElementById('left-dot').style.left = lx + '%';
+            document.getElementById('left-dot').style.top = ly + '%';
+            document.getElementById('left-coords').textContent =
+                `(${state.left_stick.x}, ${state.left_stick.y})`;
+
+            // Right stick
+            const rx = (state.right_stick.x / 255) * 100;
+            const ry = (state.right_stick.y / 255) * 100;
+            document.getElementById('right-dot').style.left = rx + '%';
+            document.getElementById('right-dot').style.top = ry + '%';
+            document.getElementById('right-coords').textContent =
+                `(${state.right_stick.x}, ${state.right_stick.y})`;
+        }
+
+        function updateTriggers(state) {
+            const l2Fill = document.getElementById('l2-fill');
+            const r2Fill = document.getElementById('r2-fill');
+
+            l2Fill.style.width = (state.l2 / 255 * 100) + '%';
+            r2Fill.style.width = (state.r2 / 255 * 100) + '%';
+
+            l2Fill.classList.toggle('clicked', state.buttons.l2_click);
+            r2Fill.classList.toggle('clicked', state.buttons.r2_click);
+
+            document.getElementById('l2-value').textContent = state.l2;
+            document.getElementById('r2-value').textContent = state.r2;
+        }
+
+        function updateButtons(state) {
+            const buttons = state.buttons;
+
+            // Face buttons
+            document.getElementById('btn-cross').classList.toggle('active', buttons.cross);
+            document.getElementById('btn-circle').classList.toggle('active', buttons.circle);
+            document.getElementById('btn-square').classList.toggle('active', buttons.square);
+            document.getElementById('btn-triangle').classList.toggle('active', buttons.triangle);
+
+            // Shoulders
+            document.getElementById('btn-l1').classList.toggle('active', buttons.l1);
+            document.getElementById('btn-r1').classList.toggle('active', buttons.r1);
+
+            // Other buttons
+            document.getElementById('btn-l3').classList.toggle('active', buttons.l3);
+            document.getElementById('btn-r3').classList.toggle('active', buttons.r3);
+            document.getElementById('btn-create').classList.toggle('active', buttons.create);
+            document.getElementById('btn-options').classList.toggle('active', buttons.options);
+            document.getElementById('btn-ps').classList.toggle('active', buttons.ps);
+            document.getElementById('btn-touchpad').classList.toggle('active', buttons.touchpad);
+            document.getElementById('btn-mute').classList.toggle('active', buttons.mute);
+
+            // D-Pad
+            const dpad = state.dpad;
+            document.getElementById('dpad-up').classList.toggle('active',
+                ['UP', 'UP_LEFT', 'UP_RIGHT'].includes(dpad));
+            document.getElementById('dpad-down').classList.toggle('active',
+                ['DOWN', 'DOWN_LEFT', 'DOWN_RIGHT'].includes(dpad));
+            document.getElementById('dpad-left').classList.toggle('active',
+                ['LEFT', 'UP_LEFT', 'DOWN_LEFT'].includes(dpad));
+            document.getElementById('dpad-right').classList.toggle('active',
+                ['RIGHT', 'UP_RIGHT', 'DOWN_RIGHT'].includes(dpad));
+        }
+
+        function updateTouchpad(state) {
+            const touchpad = document.getElementById('touchpad');
+            const touch1 = document.getElementById('touch1');
+            const touch2 = document.getElementById('touch2');
+
+            touchpad.classList.toggle('clicked', state.buttons?.touchpad);
+
+            if (state.touch[0].active) {
+                touch1.classList.add('active');
+                touch1.style.left = (state.touch[0].x / 1920 * 100) + '%';
+                touch1.style.top = (state.touch[0].y / 1080 * 100) + '%';
+            } else {
+                touch1.classList.remove('active');
+            }
+
+            if (state.touch[1].active) {
+                touch2.classList.add('active');
+                touch2.style.left = (state.touch[1].x / 1920 * 100) + '%';
+                touch2.style.top = (state.touch[1].y / 1080 * 100) + '%';
+            } else {
+                touch2.classList.remove('active');
+            }
+        }
+
+        function updateMotion(state) {
+            const maxGyro = 32768;
+            const maxAccel = 32768;
+
+            ['x', 'y', 'z'].forEach(axis => {
+                const gyroVal = state.gyro[axis];
+                const accelVal = state.accel[axis];
+
+                // Gyro
+                const gyroFill = document.getElementById(`gyro-${axis}`);
+                const gyroPercent = (gyroVal / maxGyro) * 50;
+                if (gyroVal >= 0) {
+                    gyroFill.style.left = '50%';
+                    gyroFill.style.width = Math.min(gyroPercent, 50) + '%';
+                } else {
+                    const width = Math.min(Math.abs(gyroPercent), 50);
+                    gyroFill.style.left = (50 - width) + '%';
+                    gyroFill.style.width = width + '%';
+                }
+                document.getElementById(`gyro-${axis}-val`).textContent = gyroVal;
+
+                // Accel
+                const accelFill = document.getElementById(`accel-${axis}`);
+                const accelPercent = (accelVal / maxAccel) * 50;
+                if (accelVal >= 0) {
+                    accelFill.style.left = '50%';
+                    accelFill.style.width = Math.min(accelPercent, 50) + '%';
+                } else {
+                    const width = Math.min(Math.abs(accelPercent), 50);
+                    accelFill.style.left = (50 - width) + '%';
+                    accelFill.style.width = width + '%';
+                }
+                document.getElementById(`accel-${axis}-val`).textContent = accelVal;
+            });
+        }
+
+        function updateBattery(state) {
+            const fill = document.getElementById('battery-fill');
+            const text = document.getElementById('battery-text');
+            const level = state.battery * 10;
+
+            fill.style.width = level + '%';
+            fill.classList.remove('low', 'medium');
+            if (level <= 20) fill.classList.add('low');
+            else if (level <= 50) fill.classList.add('medium');
+
+            text.textContent = level + '%' + (state.charging ? ' ⚡' : '');
+        }
+
+        // Output controls
+        document.getElementById('lightbar-color').addEventListener('input', (e) => {
+            const hex = e.target.value;
+            const r = parseInt(hex.substr(1, 2), 16);
+            const g = parseInt(hex.substr(3, 2), 16);
+            const b = parseInt(hex.substr(5, 2), 16);
+            socket.emit('set_lightbar', { r, g, b });
+        });
+
+        document.querySelectorAll('.color-preset').forEach(preset => {
+            preset.addEventListener('click', () => {
+                const hex = preset.dataset.color;
+                document.getElementById('lightbar-color').value = hex;
+                const r = parseInt(hex.substr(1, 2), 16);
+                const g = parseInt(hex.substr(3, 2), 16);
+                const b = parseInt(hex.substr(5, 2), 16);
+                socket.emit('set_lightbar', { r, g, b });
+            });
+        });
+
+        ['left', 'right'].forEach(side => {
+            const slider = document.getElementById(`haptic-${side}`);
+            const val = document.getElementById(`haptic-${side}-val`);
+            slider.addEventListener('input', () => {
+                val.textContent = slider.value;
+                socket.emit('set_haptic', {
+                    left: parseInt(document.getElementById('haptic-left').value),
+                    right: parseInt(document.getElementById('haptic-right').value)
+                });
+            });
+        });
+
+        document.querySelectorAll('.led-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.led-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                socket.emit('set_player_leds', { pattern: parseInt(btn.dataset.led) });
+            });
+        });
+
+        ['l2', 'r2'].forEach(trigger => {
+            document.getElementById(`${trigger}-mode`).addEventListener('change', (e) => {
+                socket.emit('set_trigger', {
+                    trigger: trigger.toUpperCase(),
+                    mode: e.target.value,
+                    start: 50,
+                    force: 200
+                });
+            });
+        });
+    </script>
+</body>
+</html>
