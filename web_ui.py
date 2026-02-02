@@ -1,16 +1,55 @@
 #!/usr/bin/env python3
 """
 DualSense Web Interface - Real-time controller testing via browser
-Pure REST API - no WebSocket needed
+Pure REST API with SSE streaming
 """
 
-from flask import Flask, render_template, request, jsonify
+import threading
+import time
+from flask import Flask, render_template, request, jsonify, Response
 from dualsense import DualSense, PlayerLED, TriggerMode
+import json
 
 app = Flask(__name__)
 
-# Global controller instance
+# Global controller instance and state
 ds = None
+current_state = None
+state_lock = threading.Lock()
+reader_running = False
+
+
+def controller_reader():
+    """Background thread that continuously reads controller state"""
+    global current_state, reader_running
+    while reader_running and ds:
+        state = ds.read_blocking(timeout_ms=50)
+        if state:
+            with state_lock:
+                current_state = {
+                    'left_stick': {'x': state.left_stick_x, 'y': state.left_stick_y},
+                    'right_stick': {'x': state.right_stick_x, 'y': state.right_stick_y},
+                    'l2': state.l2_trigger,
+                    'r2': state.r2_trigger,
+                    'dpad': state.dpad.name,
+                    'buttons': {
+                        'cross': state.cross, 'circle': state.circle,
+                        'square': state.square, 'triangle': state.triangle,
+                        'l1': state.l1, 'r1': state.r1,
+                        'l2_click': state.l2_button, 'r2_click': state.r2_button,
+                        'l3': state.l3, 'r3': state.r3,
+                        'create': state.create, 'options': state.options,
+                        'ps': state.ps, 'touchpad': state.touchpad_click, 'mute': state.mute,
+                    },
+                    'touch': [
+                        {'active': state.touch1.active, 'x': state.touch1.x, 'y': state.touch1.y},
+                        {'active': state.touch2.active, 'x': state.touch2.x, 'y': state.touch2.y},
+                    ],
+                    'gyro': {'x': state.gyro_x, 'y': state.gyro_y, 'z': state.gyro_z},
+                    'accel': {'x': state.accel_x, 'y': state.accel_y, 'z': state.accel_z},
+                    'battery': state.battery_level,
+                    'charging': state.battery_charging,
+                }
 
 
 @app.route('/')
@@ -22,12 +61,16 @@ def index():
 @app.route('/api/connect', methods=['POST'])
 def api_connect():
     """Connect to controller"""
-    global ds
+    global ds, reader_running
     if ds is None:
         ds = DualSense()
         if ds.open():
             conn_type = ds.connection_type
             print(f"Controller connected via REST API! Mode: {conn_type}")
+            # Start background reader thread
+            reader_running = True
+            thread = threading.Thread(target=controller_reader, daemon=True)
+            thread.start()
             return jsonify({
                 'connected': True,
                 'mode': conn_type,
@@ -47,41 +90,21 @@ def api_connect():
 @app.route('/api/stream')
 def api_stream():
     """Server-Sent Events stream for real-time updates"""
-    import json
-    import time
-    from flask import Response
-
     def generate():
-        global ds
+        global current_state
+        last_sent = None
         while True:
-            if ds:
-                state = ds.read_blocking(timeout_ms=50)
-                if state:
-                    data = json.dumps({
-                        'left_stick': {'x': state.left_stick_x, 'y': state.left_stick_y},
-                        'right_stick': {'x': state.right_stick_x, 'y': state.right_stick_y},
-                        'l2': state.l2_trigger,
-                        'r2': state.r2_trigger,
-                        'dpad': state.dpad.name if state.dpad else 'NONE',
-                        'buttons': {
-                            'cross': state.cross, 'circle': state.circle,
-                            'square': state.square, 'triangle': state.triangle,
-                            'l1': state.l1, 'r1': state.r1,
-                            'l2_click': state.l2_button, 'r2_click': state.r2_button,
-                            'l3': state.l3, 'r3': state.r3,
-                            'create': state.create, 'options': state.options,
-                            'ps': state.ps, 'touchpad': state.touchpad_click, 'mute': state.mute,
-                        },
-                        'touch': [
-                            {'active': state.touch1.active, 'x': state.touch1.x, 'y': state.touch1.y},
-                            {'active': state.touch2.active, 'x': state.touch2.x, 'y': state.touch2.y},
-                        ],
-                        'gyro': {'x': state.gyro_x, 'y': state.gyro_y, 'z': state.gyro_z},
-                        'accel': {'x': state.accel_x, 'y': state.accel_y, 'z': state.accel_z},
-                        'battery': state.battery_level,
-                        'charging': state.battery_charging,
-                    })
-                    yield f"data: {data}\n\n"
+            try:
+                with state_lock:
+                    state = current_state
+                if state and state != last_sent:
+                    yield f"data: {json.dumps(state)}\n\n"
+                    last_sent = state
+                time.sleep(0.008)  # ~120Hz max
+            except GeneratorExit:
+                break
+            except Exception:
+                break
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -101,7 +124,7 @@ def api_state():
             'right_stick': {'x': state.right_stick_x, 'y': state.right_stick_y},
             'l2': state.l2_trigger,
             'r2': state.r2_trigger,
-            'dpad': state.dpad.name if state.dpad else 'NONE',
+            'dpad': state.dpad.name,
             'buttons': {
                 'cross': state.cross,
                 'circle': state.circle,
@@ -192,7 +215,9 @@ def api_trigger():
 
 
 def cleanup():
-    global ds
+    global ds, reader_running
+    reader_running = False
+    time.sleep(0.1)  # Let reader thread exit
     if ds:
         ds.set_lightbar(0, 0, 0)
         ds.set_haptic(0, 0)
@@ -213,8 +238,7 @@ if __name__ == '__main__':
     print("Press Ctrl+C to exit\n")
 
     try:
-        # Use Flask threaded server - better for SSE streaming
-        from werkzeug.serving import run_simple
-        run_simple('0.0.0.0', 5000, app, threaded=True, use_reloader=False)
+        # Use threaded Flask server
+        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
     except KeyboardInterrupt:
         cleanup()

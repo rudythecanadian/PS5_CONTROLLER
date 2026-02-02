@@ -882,10 +882,7 @@
         }
 
         function updateMotion(state) {
-            if (!state.gyro || !state.accel) {
-                console.error('Missing gyro/accel in state:', state);
-                return;
-            }
+            if (!state.gyro || !state.accel) return;
 
             const maxGyro = 32768;
             const maxAccel = 32768;

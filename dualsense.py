@@ -383,6 +383,8 @@ class DualSense:
         self._evdev_main = None      # Main controller (buttons, sticks, triggers)
         self._evdev_motion = None    # Motion sensors (gyro, accel)
         self._evdev_touchpad = None  # Touchpad
+        self._hat_x = 0  # D-pad X: -1=left, 0=center, 1=right
+        self._hat_y = 0  # D-pad Y: -1=up, 0=center, 1=down
 
         # Output state (sent with send())
         self._lightbar_r = 0
@@ -424,13 +426,20 @@ class DualSense:
                 self._hidraw_fd = os.open(hidraw_path, os.O_RDWR | os.O_NONBLOCK)
                 self._is_bluetooth = is_bluetooth
 
-                # If playstation driver is active AND Bluetooth, use sysfs for outputs and evdev for inputs
-                # USB with playstation driver can still use raw HID
-                if driver == "playstation" and is_bluetooth:
-                    self._use_sysfs = True
-                    self._sysfs_leds = _find_sysfs_leds()
+                # If playstation driver is active, use evdev for d-pad/buttons input
+                # The driver intercepts these from raw HID and routes to evdev
+                # For Bluetooth: also use sysfs for LED output
+                # For USB: use hidraw for LED output, but evdev for button input
+                if driver == "playstation":
+                    # Bluetooth uses sysfs for LED output, USB uses hidraw
+                    if is_bluetooth:
+                        self._use_sysfs = True
+                        self._sysfs_leds = _find_sysfs_leds()
+                    else:
+                        self._use_sysfs = False
 
-                    # Try to open evdev devices for inputs
+                    # Try to open evdev devices for inputs (both USB and Bluetooth)
+                    # The playstation driver routes d-pad/buttons to evdev
                     evdev_paths = _find_evdev_devices()
                     if evdev and evdev_paths.get('main'):
                         try:
@@ -469,15 +478,16 @@ class DualSense:
                         except:
                             self._ff_device = None
 
-                    led_count = len(self._sysfs_leds)
-                    ff_status = "yes" if self._ff_device else "no"
+                    conn_type = "Bluetooth" if is_bluetooth else "USB"
+                    output_mode = "sysfs" if self._use_sysfs else "hidraw"
                     input_mode = "evdev" if self._use_evdev else "hidraw"
+                    ff_status = "yes" if self._ff_device else "no"
                     motion_status = "yes" if self._evdev_motion else "no"
                     touch_status = "yes" if self._evdev_touchpad else "no"
-                    print(f"Connected via Bluetooth ({hidraw_path})")
+                    print(f"Connected via {conn_type} ({hidraw_path})")
                     print(f"  Driver: hid-playstation (kernel)")
-                    print(f"  Input: {input_mode}, Output: sysfs")
-                    print(f"  LEDs: {led_count}, FF: {ff_status}, Motion: {motion_status}, Touchpad: {touch_status}")
+                    print(f"  Input: {input_mode}, Output: {output_mode}")
+                    print(f"  FF: {ff_status}, Motion: {motion_status}, Touchpad: {touch_status}")
                 else:
                     # USB with playstation driver OR Bluetooth without playstation driver
                     self._use_sysfs = False
@@ -802,9 +812,11 @@ class DualSense:
                         # D-pad
                         elif code == ecodes.ABS_HAT0X:
                             # -1=left, 0=center, 1=right
+                            self._hat_x = value
                             self._update_dpad_from_hat()
                         elif code == ecodes.ABS_HAT0Y:
                             # -1=up, 0=center, 1=down
+                            self._hat_y = value
                             self._update_dpad_from_hat()
             except BlockingIOError:
                 pass  # No events available
@@ -869,19 +881,11 @@ class DualSense:
 
     def _update_dpad_from_hat(self):
         """Update d-pad state from HAT0X/HAT0Y values"""
-        if not self._evdev_main:
-            return
-
         s = self._state
+        hat_x = self._hat_x
+        hat_y = self._hat_y
 
-        # Get current HAT values from device
-        try:
-            absinfo_x = self._evdev_main.absinfo(ecodes.ABS_HAT0X)
-            absinfo_y = self._evdev_main.absinfo(ecodes.ABS_HAT0Y)
-            hat_x = absinfo_x.value if absinfo_x else 0
-            hat_y = absinfo_y.value if absinfo_y else 0
-        except:
-            return
+        old_dpad = s.dpad
 
         # Map HAT values to DPad enum
         # HAT0X: -1=left, 0=center, 1=right
