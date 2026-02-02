@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DualSense Controller Test</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Using REST API for controller communication -->
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -445,6 +445,27 @@
 
         .battery-fill.low { background: #e74c3c; }
         .battery-fill.medium { background: #f39c12; }
+
+        .warning-badge {
+            background: #f39c12;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            margin-left: 8px;
+        }
+
+        .control-group.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .note {
+            padding: 8px;
+            background: rgba(243, 156, 18, 0.1);
+            border-radius: 5px;
+            border-left: 3px solid #f39c12;
+        }
     </style>
 </head>
 <body>
@@ -652,8 +673,8 @@
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <label>Adaptive Triggers</label>
+                <div class="control-group" id="trigger-control-group">
+                    <label>Adaptive Triggers <span id="trigger-warning" class="warning-badge" style="display:none">USB only</span></label>
                     <div class="trigger-controls">
                         <div class="trigger-control">
                             <h4>L2</h4>
@@ -672,39 +693,103 @@
                             </select>
                         </div>
                     </div>
+                    <div id="trigger-note" class="note" style="display:none; margin-top:10px; font-size:0.8rem; color:#f39c12;">
+                        ⚠️ Adaptive triggers require USB connection. Bluetooth uses kernel driver which doesn't expose trigger control.
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        const socket = io();
+        // Use REST polling for fast, reliable updates
+        let pollInterval = null;
+        let isConnected = false;
+        let connectionMode = null;
 
-        // Status handling
-        socket.on('connect', () => {
-            console.log('WebSocket connected');
-        });
+        // Connect to controller on page load
+        async function connect() {
+            try {
+                const res = await fetch('/api/connect', { method: 'POST' });
+                const data = await res.json();
+                handleStatus(data);
+                if (data.connected) {
+                    startStreaming();
+                }
+            } catch (e) {
+                console.error('Connect failed:', e);
+                document.getElementById('status').textContent = 'Connection failed';
+                document.getElementById('status').className = 'status disconnected';
+            }
+        }
 
-        socket.on('status', (data) => {
+        function handleStatus(data) {
             const status = document.getElementById('status');
+            const triggerWarning = document.getElementById('trigger-warning');
+            const triggerNote = document.getElementById('trigger-note');
+            const triggerGroup = document.getElementById('trigger-control-group');
+
             if (data.connected) {
-                status.textContent = 'Connected';
+                isConnected = true;
+                connectionMode = data.mode;
+                let modeText = data.mode || 'connected';
+                let isBluetooth = false;
+
+                if (data.mode === 'bluetooth_sysfs') {
+                    modeText = 'Bluetooth (evdev+sysfs)';
+                    isBluetooth = true;
+                } else if (data.mode === 'bluetooth_raw') {
+                    modeText = 'Bluetooth (hidraw)';
+                    isBluetooth = true;
+                } else if (data.mode === 'usb' || data.mode === 'usb_hidraw') {
+                    modeText = 'USB';
+                }
+
+                status.textContent = modeText;
                 status.className = 'status connected';
+
+                // Show/hide adaptive trigger warning for Bluetooth
+                if (isBluetooth) {
+                    triggerWarning.style.display = 'inline';
+                    triggerNote.style.display = 'block';
+                    triggerGroup.classList.add('disabled');
+                } else {
+                    triggerWarning.style.display = 'none';
+                    triggerNote.style.display = 'none';
+                    triggerGroup.classList.remove('disabled');
+                }
             } else {
+                isConnected = false;
                 status.textContent = 'Disconnected: ' + (data.error || '');
                 status.className = 'status disconnected';
             }
-        });
+        }
 
-        // Controller state updates
-        socket.on('controller_state', (state) => {
-            updateSticks(state);
-            updateTriggers(state);
-            updateButtons(state);
-            updateTouchpad(state);
-            updateMotion(state);
-            updateBattery(state);
-        });
+        let eventSource = null;
+
+        function startStreaming() {
+            // Use Server-Sent Events for real-time updates
+            eventSource = new EventSource('/api/stream');
+
+            eventSource.onmessage = (event) => {
+                const state = JSON.parse(event.data);
+                updateSticks(state);
+                updateTriggers(state);
+                updateButtons(state);
+                updateTouchpad(state);
+                updateMotion(state);
+                updateBattery(state);
+            };
+
+            eventSource.onerror = () => {
+                console.log('SSE connection lost, reconnecting...');
+                eventSource.close();
+                setTimeout(startStreaming, 1000);
+            };
+        }
+
+        // Connect on page load
+        connect();
 
         function updateSticks(state) {
             // Left stick
@@ -797,38 +882,50 @@
         }
 
         function updateMotion(state) {
+            if (!state.gyro || !state.accel) {
+                console.error('Missing gyro/accel in state:', state);
+                return;
+            }
+
             const maxGyro = 32768;
             const maxAccel = 32768;
 
             ['x', 'y', 'z'].forEach(axis => {
-                const gyroVal = state.gyro[axis];
-                const accelVal = state.accel[axis];
+                const gyroVal = state.gyro[axis] || 0;
+                const accelVal = state.accel[axis] || 0;
 
-                // Gyro
+                // Update numeric display
+                const gyroValEl = document.getElementById(`gyro-${axis}-val`);
+                const accelValEl = document.getElementById(`accel-${axis}-val`);
+                if (gyroValEl) gyroValEl.textContent = gyroVal;
+                if (accelValEl) accelValEl.textContent = accelVal;
+
+                // Update bar
                 const gyroFill = document.getElementById(`gyro-${axis}`);
-                const gyroPercent = (gyroVal / maxGyro) * 50;
-                if (gyroVal >= 0) {
-                    gyroFill.style.left = '50%';
-                    gyroFill.style.width = Math.min(gyroPercent, 50) + '%';
-                } else {
-                    const width = Math.min(Math.abs(gyroPercent), 50);
-                    gyroFill.style.left = (50 - width) + '%';
-                    gyroFill.style.width = width + '%';
+                if (gyroFill) {
+                    const pct = Math.abs(gyroVal / maxGyro) * 50;
+                    if (gyroVal >= 0) {
+                        gyroFill.style.left = '50%';
+                        gyroFill.style.width = Math.min(pct, 50) + '%';
+                    } else {
+                        const w = Math.min(pct, 50);
+                        gyroFill.style.left = (50 - w) + '%';
+                        gyroFill.style.width = w + '%';
+                    }
                 }
-                document.getElementById(`gyro-${axis}-val`).textContent = gyroVal;
 
-                // Accel
                 const accelFill = document.getElementById(`accel-${axis}`);
-                const accelPercent = (accelVal / maxAccel) * 50;
-                if (accelVal >= 0) {
-                    accelFill.style.left = '50%';
-                    accelFill.style.width = Math.min(accelPercent, 50) + '%';
-                } else {
-                    const width = Math.min(Math.abs(accelPercent), 50);
-                    accelFill.style.left = (50 - width) + '%';
-                    accelFill.style.width = width + '%';
+                if (accelFill) {
+                    const pct = Math.abs(accelVal / maxAccel) * 50;
+                    if (accelVal >= 0) {
+                        accelFill.style.left = '50%';
+                        accelFill.style.width = Math.min(pct, 50) + '%';
+                    } else {
+                        const w = Math.min(pct, 50);
+                        accelFill.style.left = (50 - w) + '%';
+                        accelFill.style.width = w + '%';
+                    }
                 }
-                document.getElementById(`accel-${axis}-val`).textContent = accelVal;
             });
         }
 
@@ -845,13 +942,21 @@
             text.textContent = level + '%' + (state.charging ? ' ⚡' : '');
         }
 
-        // Output controls
+        // Output controls - using REST API for reliability
+        function setLightbar(r, g, b) {
+            fetch('/api/lightbar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ r, g, b })
+            });
+        }
+
         document.getElementById('lightbar-color').addEventListener('input', (e) => {
             const hex = e.target.value;
             const r = parseInt(hex.substr(1, 2), 16);
             const g = parseInt(hex.substr(3, 2), 16);
             const b = parseInt(hex.substr(5, 2), 16);
-            socket.emit('set_lightbar', { r, g, b });
+            setLightbar(r, g, b);
         });
 
         document.querySelectorAll('.color-preset').forEach(preset => {
@@ -861,7 +966,7 @@
                 const r = parseInt(hex.substr(1, 2), 16);
                 const g = parseInt(hex.substr(3, 2), 16);
                 const b = parseInt(hex.substr(5, 2), 16);
-                socket.emit('set_lightbar', { r, g, b });
+                setLightbar(r, g, b);
             });
         });
 
@@ -870,9 +975,13 @@
             const val = document.getElementById(`haptic-${side}-val`);
             slider.addEventListener('input', () => {
                 val.textContent = slider.value;
-                socket.emit('set_haptic', {
-                    left: parseInt(document.getElementById('haptic-left').value),
-                    right: parseInt(document.getElementById('haptic-right').value)
+                fetch('/api/haptic', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        left: parseInt(document.getElementById('haptic-left').value),
+                        right: parseInt(document.getElementById('haptic-right').value)
+                    })
                 });
             });
         });
@@ -881,17 +990,25 @@
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.led-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                socket.emit('set_player_leds', { pattern: parseInt(btn.dataset.led) });
+                fetch('/api/player_leds', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pattern: parseInt(btn.dataset.led) })
+                });
             });
         });
 
         ['l2', 'r2'].forEach(trigger => {
             document.getElementById(`${trigger}-mode`).addEventListener('change', (e) => {
-                socket.emit('set_trigger', {
-                    trigger: trigger.toUpperCase(),
-                    mode: e.target.value,
-                    start: 50,
-                    force: 200
+                fetch('/api/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        trigger: trigger.toUpperCase(),
+                        mode: e.target.value,
+                        start: 50,
+                        force: 200
+                    })
                 });
             });
         });
